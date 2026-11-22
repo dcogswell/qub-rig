@@ -3,14 +3,14 @@
 # Locks down the cloreai/hiveos image defaults, starts key-only sshd,
 # fetches + verifies the agent, then execs it.
 #   arg 1: repo commit sha to fetch rig files from
-#   env:   CLORQUB_REPO_RAW (default https://raw.githubusercontent.com/dcogswell/clorqub)
+#   env:   CLORQUB_REPO_RAW (default https://raw.githubusercontent.com/dcogswell/qub-rig)
 #          CLORQUB_SSH_PUBKEY  (public key line, optional)
 #          CLORQUB_LOCAL_SRC   (dir containing rig/ — copy instead of download;
 #                             for local testing only)
 set -u
 
 COMMIT="${1:?usage: bootstrap.sh <commit-sha>}"
-REPO_RAW="${CLORQUB_REPO_RAW:-https://raw.githubusercontent.com/dcogswell/clorqub}"
+REPO_RAW="${CLORQUB_REPO_RAW:-https://raw.githubusercontent.com/dcogswell/qub-rig}"
 DEST=/clorqub/agent
 LOG=/clorqub/bootstrap.log
 
