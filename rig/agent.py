@@ -698,7 +698,8 @@ def cmd_run(_args):
             parsed = qp.parse_stats_file(files[0][1])
             if parsed:
                 shares.update({
-                    "epoch": parsed["epoch"],
+                    "epoch": parsed["epoch"]
+                    if parsed["epoch"] is not None else files[0][0],
                     "found": parsed["found_shares"],
                     "submitted": parsed["submitted_shares"],
                     "invalid": parsed["invalid_shares"],
@@ -706,6 +707,7 @@ def cmd_run(_args):
                     "score_n": parsed["score_n"],
                     "score_med": parsed["score_med"],
                     "score_sum": parsed["score_sum"],
+                    "score_hist": parsed["score_hist"],
                 })
         trainer = {}
         for line in reversed(qp.tail_log_lines(

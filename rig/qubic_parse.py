@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+from collections import Counter
 from datetime import datetime, timezone
 
 
@@ -89,6 +90,7 @@ def parse_stats_file(path):
       "score_n": int                     # non-invalid solutions with a score
       "score_med": float | None          # median ReportedScore
       "score_sum": float                 # total ReportedScore
+      "score_hist": [[score, count], ...] # non-invalid solutions
     }
     """
     if not path or not os.path.isfile(path):
@@ -131,6 +133,10 @@ def parse_stats_file(path):
                             + scores[len(scores) // 2]) / 2)
         if scores else None,
         "score_sum": sum(scores),
+        "score_hist": [list(pair) for pair in Counter(
+            score for score in scores
+            if type(score) in (int, float)
+            and 0 <= score < float("inf")).items()],
     }
 
 
