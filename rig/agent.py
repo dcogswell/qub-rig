@@ -552,6 +552,42 @@ def env_int(name, default):
         return default
 
 
+CPU_BANNER_RE = re.compile(r"CPU\s*:\s*\S+\s*\((\d+) threads\)")
+
+
+def want_threads_from_env(env, ncpu):
+    """Intended CPU trainer thread count, recomputed from primordial
+    inputs (raw env string + cpu count). Deliberately does NOT share
+    env_int or the boot clamp -- this is the verification path and it
+    must not inherit the render path's bugs (2026-11-26: env_int
+    floored CPU_THREADS=0 to 1, so every auto-sized rig booted
+    single-threaded while config and miner agreed)."""
+    raw = (env.get("CPU_THREADS") or "").strip()
+    cap = ncpu or 2
+    base = max(1, cap - 1)
+    try:
+        n = int(raw) if raw else 0
+    except ValueError:
+        n = 0
+    if n <= 0 or n >= cap:
+        return base
+    return n
+
+
+def scan_banner_threads(log_path, offset=0):
+    """First CPU trainer banner `CPU    : AVX512 (N threads)` at or
+    after `offset` in the miner log. The banner is the miner's own
+    report of what it launched -- independent of anything we wrote."""
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(offset)
+            text = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    m = CPU_BANNER_RE.search(text)
+    return int(m.group(1)) if m else None
+
+
 def pkg_url_for(pool, jetski_mode):
     if pool == "qli":
         return os.environ.get("PKG_URL_QLI", PKG_URL_QLI)
@@ -642,6 +678,25 @@ def cmd_run(_args):
     miner = None
     backoff = 5
     bg_fetch = {}  # pool -> thread
+
+    # post-startup thread verification: compares the miner's own boot
+    # banner against intent recomputed from primordials -- NOT the
+    # rendered config, because the render path itself is what is being
+    # verified. One correction attempt per boot; no flap loop.
+    tcheck = {"state": "pending", "want": None, "observed": None,
+              "corrected": False, "offset": 0, "miner_up_at": None,
+              "checked_at": None}
+
+    def reset_tcheck():
+        try:
+            tcheck["offset"] = os.path.getsize(
+                os.path.join(LOGS_DIR, f"{pool}.log"))
+        except OSError:
+            tcheck["offset"] = 0
+        tcheck["state"] = "pending"
+        tcheck["observed"] = None
+        tcheck["miner_up_at"] = time.time()
+        tcheck["checked_at"] = None
 
     def start_bg_fetch(p):
         if p in packages or p in bg_fetch and bg_fetch[p].is_alive():
@@ -748,6 +803,9 @@ def cmd_run(_args):
             "its": parse_its(os.path.join(LOGS_DIR, f"{pool}.log")),
             "shares": shares,
             "trainer": trainer or None,
+            "threads_check": {k: tcheck.get(k) for k in
+                              ("state", "want", "observed", "corrected",
+                               "checked_at")},
             "jetski_summary": jetski_summary() if pool == "jetski" else None,
             "boot": timeline,
             "hardware": state["hardware"],
@@ -774,6 +832,7 @@ def cmd_run(_args):
         if miner is None or not miner.alive():
             miner = MinerProc(pool, pkg["dir"], binary, args)
             miner.start()
+            reset_tcheck()
             timeline.setdefault("miner_start", utcnow())
             start_bg_fetch(other_pool(pool))
 
@@ -798,6 +857,53 @@ def cmd_run(_args):
                 log(f"status write failed: {e}")
             if not _viewer_alive():
                 _ensure_viewer(miner.raw_path)
+
+            # independent post-startup thread verification: the miner
+            # reports its own launched thread count in the boot banner;
+            # compare against intent recomputed from primordials and
+            # correct once if they disagree.
+            if tcheck["state"] == "pending" and tcheck["miner_up_at"]:
+                age = time.time() - tcheck["miner_up_at"]
+                if age >= 15:
+                    observed = scan_banner_threads(
+                        miner.log_path, tcheck["offset"])
+                    if observed is not None:
+                        want = want_threads_from_env(
+                            os.environ, os.cpu_count())
+                        tcheck["want"] = want
+                        tcheck["observed"] = observed
+                        tcheck["checked_at"] = utcnow()
+                        if observed == want:
+                            tcheck["state"] = "ok"
+                        elif tcheck["corrected"]:
+                            tcheck["state"] = "failed"
+                            log(f"threads check: banner {observed} != want "
+                                f"{want} after correction; giving up")
+                        else:
+                            log(f"threads check: banner {observed} != want "
+                                f"{want}; correcting config + restarting")
+                            tcheck["corrected"] = True
+                            try:
+                                cfg_fix = render_config(
+                                    pool, jetski_mode, creds, alias,
+                                    want, gpu)
+                                fd = os.open(cfg_path, os.O_WRONLY
+                                             | os.O_CREAT | os.O_TRUNC,
+                                             0o600)
+                                with os.fdopen(fd, "w") as f:
+                                    json.dump(cfg_fix, f, indent=2)
+                                miner.stop()
+                                miner = MinerProc(pool, pkg["dir"],
+                                                  binary, args)
+                                miner.start()
+                                reset_tcheck()
+                                continue
+                            except Exception as e:
+                                tcheck["state"] = "failed"
+                                log(f"threads correction failed: {e}")
+                    elif age >= 180:
+                        tcheck["state"] = "inconclusive"
+                        tcheck["checked_at"] = utcnow()
 
             ctrl = read_control()
             if ctrl and ctrl.get("switch_to") in ("jetski", "qli") \
@@ -836,6 +942,7 @@ def cmd_run(_args):
                 backoff = min(backoff * 2, 60)
                 miner = MinerProc(pool, pkg["dir"], binary, args)
                 miner.start()
+                reset_tcheck()
             else:
                 backoff = 5
         if not switched:
