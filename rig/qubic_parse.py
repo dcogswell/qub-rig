@@ -86,7 +86,7 @@ def parse_stats_file(path):
       "submitted_shares": int,
       "invalid_shares": int,
       "solution_times": [datetime, ...]   # UTC, sorted ascending
-      "best_score": int | None           # max ReportedScore, non-invalid sols
+      "best_score": int | None           # min ReportedScore, non-invalid sols
       "score_n": int                     # non-invalid solutions with a score
       "score_med": float | None          # median ReportedScore
       "score_sum": float                 # total ReportedScore
@@ -126,7 +126,7 @@ def parse_stats_file(path):
         "submitted_shares": data.get("SubmittedShares", 0),
         "invalid_shares": data.get("InvalidShares", 0),
         "solution_times": times,
-        "best_score": max(scores) if scores else None,
+        "best_score": min(scores) if scores else None,
         "score_n": len(scores),
         "score_med": (scores[len(scores) // 2] if len(scores) % 2
                       else (scores[len(scores) // 2 - 1]
