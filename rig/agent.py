@@ -543,8 +543,11 @@ def resolve_pool(state, env_pool):
 # ---------------------------------------------------------------------------
 
 def env_int(name, default):
+    # raw parse: zero/negative must survive to the caller -- the
+    # CPU_THREADS clamp reads <= 0 as 'size to nproc-1', so flooring
+    # here would silently pin every auto-sized rig at one thread
     try:
-        return max(1, int(os.environ.get(name, "")))
+        return int(os.environ.get(name, ""))
     except ValueError:
         return default
 
